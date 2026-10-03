@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and change domain_name to a hosted zone you own.
+region        = "eu-central-1"
+domain_name   = "example.com" # existing public Route 53 hosted zone
+app_subdomain = "shop"        # → https://shop.example.com
+
+# Narrow the Kubernetes API to your own IP(s):
+cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
+
+high_availability   = false # true for production-like Multi-AZ everything
+deletion_protection = false

@@ -1,0 +1,13 @@
+# How services find each other: plain Kubernetes Service DNS names
+# (same namespace, so the short name works: http://catalogue → catalogue Service :80).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-urls
+data:
+  CATALOGUE_URL: http://catalogue
+  CART_URL: http://cart
+  INVENTORY_URL: http://inventory
+  PAYMENT_URL: http://payment
+  # Structured JSON logs (Elastic Common Schema) — easy to search in CloudWatch.
+  LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs

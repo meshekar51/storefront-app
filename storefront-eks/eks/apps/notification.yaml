@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────
+#  notification — consumes order.confirmed from Amazon MQ, sends the
+#  customer email (logged in this demo). No Service: nothing calls it.
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification
+  labels: { app: notification }
+spec:
+  replicas: 2 # two consumers on one queue: RabbitMQ load-balances messages between them
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: notification }
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: notification }
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: notification }
+      containers:
+        - name: app
+          image: __ECR_REGISTRY__/storefront/notification-service:__IMAGE_TAG__
+          ports:
+            - { name: http, containerPort: 8080 } # health probes only
+          envFrom:
+            - configMapRef: { name: service-urls }
+          env:
+            - name: MQ_URL
+              valueFrom: { secretKeyRef: { name: rabbitmq, key: url } }
+            - name: MQ_USERNAME
+              valueFrom: { secretKeyRef: { name: rabbitmq, key: username } }
+            - name: MQ_PASSWORD
+              valueFrom: { secretKeyRef: { name: rabbitmq, key: password } }
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: notification }

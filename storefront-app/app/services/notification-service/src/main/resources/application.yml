@@ -1,0 +1,30 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  mvc:
+    problemdetails:
+      enabled: true # errors as RFC 7807 JSON with a readable "detail"
+  application:
+    name: notification-service
+  rabbitmq:
+    addresses: ${MQ_URL:amqp://localhost:5672}
+    username: ${MQ_USERNAME:storefront}
+    password: ${MQ_PASSWORD:storefront}
+    listener:
+      simple:
+        default-requeue-rejected: false # failed messages → DLQ, not an endless retry loop
+        retry:
+          enabled: true # 3 quick in-process retries before giving up
+          max-retries: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true

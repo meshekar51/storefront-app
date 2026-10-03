@@ -1,0 +1,44 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  mvc:
+    problemdetails:
+      enabled: true # errors as RFC 7807 JSON with a readable "detail"
+  application:
+    name: catalogue-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/storefront?currentSchema=catalogue}
+    username: ${DB_USERNAME:storefront}
+    password: ${DB_PASSWORD:storefront}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none # Flyway owns the schema
+    properties:
+      hibernate.default_schema: catalogue
+  flyway:
+    schemas: catalogue # each service owns one schema in the shared database
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:storefront}
+      ssl:
+        enabled: ${REDIS_SSL:false} # true on ElastiCache (in-transit encryption)
+  cache:
+    type: redis
+    redis:
+      time-to-live: 10m
+      key-prefix: "catalogue::"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true # /actuator/health/liveness and /readiness for Kubernetes

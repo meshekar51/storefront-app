@@ -1,0 +1,21 @@
+# ─────────────────────────────────────────────────────────────────────
+#  The bridge between AWS and Kubernetes.
+#
+#  Terraform created the ALB + target group. This object tells the AWS
+#  Load Balancer Controller: "keep that target group in sync with the
+#  pods behind the storefront-gateway Service". It registers Envoy pod
+#  IPs (port 10080) and deregisters them as pods come and go.
+#
+#  Lives in envoy-gateway-system because it must sit next to the Service.
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: storefront-gateway
+  namespace: envoy-gateway-system
+spec:
+  targetGroupARN: __TARGET_GROUP_ARN__ # terraform output gateway_target_group_arn
+  targetType: ip
+  serviceRef:
+    name: storefront-gateway
+    port: 80

@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Gateway API — the "front door" inside the cluster.
+#
+#  GatewayClass  → which implementation (Envoy Gateway)
+#  EnvoyProxy    → how its Envoy pods run (2 replicas, ClusterIP Service
+#                  with a FIXED name, so the TargetGroupBinding can find it)
+#  Gateway       → one HTTP listener on port 80 (TLS already ended at the ALB)
+#  HTTPRoutes    → path → Service rules, in apps/routes.yaml
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: storefront-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        name: storefront-gateway # referenced by target-group-binding.yaml
+        type: ClusterIP # the ALB is the only way in; no extra load balancer
+      envoyDeployment:
+        replicas: 2
+        pod:
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  gateway.envoyproxy.io/owning-gateway-name: storefront
+        container:
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      envoyPDB:
+        minAvailable: 1
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: storefront-proxy
+    namespace: envoy-gateway-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: storefront
+  namespace: storefront
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80 # Envoy pods listen on 10080 — the ALB target group port
+      allowedRoutes:
+        namespaces:
+          from: Same # only HTTPRoutes in the storefront namespace may attach
+---
+# The ALB adds X-Forwarded-For. Trust exactly one hop so access logs and
+# rate limits see the real client IP, not the ALB's.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: trust-alb
+  namespace: storefront
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: storefront
+  clientIPDetection:
+    xForwardedFor:
+      numTrustedHops: 1

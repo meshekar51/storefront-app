@@ -1,0 +1,18 @@
+# AWS Load Balancer Controller
+# In this design it does ONE job: keep the Terraform-created ALB target group
+# filled with the IPs of the Envoy Gateway pods (TargetGroupBinding).
+# Its IAM permissions come from EKS Pod Identity (infra/registry-and-iam.tf).
+clusterName: __CLUSTER_NAME__
+region: __AWS_REGION__
+vpcId: __VPC_ID__
+
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller # must match the Pod Identity association
+
+replicaCount: 2
+
+# We never let it create load balancers from Ingress/Service objects —
+# the ALB is owned by Terraform. Keep the default IngressClass off.
+createIngressClassResource: false
+enableServiceMutatorWebhook: false

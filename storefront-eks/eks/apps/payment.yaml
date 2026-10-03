@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────────────
+#  payment — charges via the (fake) external provider, records in PostgreSQL
+#  INTERNAL ONLY: no HTTPRoute, and a NetworkPolicy lets only order in.
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment
+  labels: { app: payment }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: payment }
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: payment }
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: payment }
+      containers:
+        - name: app
+          image: __ECR_REGISTRY__/storefront/payment-service:__IMAGE_TAG__
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: service-urls }
+          env:
+            - name: DB_HOST
+              valueFrom: { secretKeyRef: { name: postgres, key: host } }
+            - name: DB_PORT
+              valueFrom: { secretKeyRef: { name: postgres, key: port } }
+            - name: DB_NAME
+              valueFrom: { secretKeyRef: { name: postgres, key: dbname } }
+            - name: DB_USERNAME
+              valueFrom: { secretKeyRef: { name: postgres, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres, key: password } }
+            - name: DB_URL
+              value: jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=require&currentSchema=payment
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 }
+          resources:
+            requests: { cpu: 200m, memory: 768Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment
+  labels: { app: payment }
+spec:
+  selector: { app: payment }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: payment }

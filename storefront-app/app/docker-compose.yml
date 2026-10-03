@@ -1,0 +1,114 @@
+# Local run of the whole system — same shape as on AWS:
+#   browser → gateway (nginx, stands in for ALB + Gateway API) → services
+#   postgres = RDS · redis = ElastiCache · rabbitmq = Amazon MQ
+#
+#   docker compose up --build      → http://localhost:8080
+#   RabbitMQ console               → http://localhost:15672 (storefront / storefront)
+name: storefront
+
+x-java-service: &java-service
+  restart: unless-stopped
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    rabbitmq: { condition: service_healthy }
+
+x-db: &db
+  DB_USERNAME: storefront
+  DB_PASSWORD: storefront
+
+services:
+  # ── backing services (AWS-managed in the cloud) ─────────────────────
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: storefront
+      POSTGRES_USER: storefront
+      POSTGRES_PASSWORD: storefront
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storefront -d storefront"]
+      interval: 5s
+      retries: 20
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "storefront"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "storefront", "ping"]
+      interval: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: storefront
+      RABBITMQ_DEFAULT_PASS: storefront
+    ports: ["15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 20
+
+  # ── Java services ───────────────────────────────────────────────────
+  catalogue:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: catalogue-service } }
+    environment:
+      <<: *db
+      DB_URL: jdbc:postgresql://postgres:5432/storefront?currentSchema=catalogue
+      REDIS_HOST: redis
+      REDIS_PASSWORD: storefront
+
+  cart:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: cart-service } }
+    environment:
+      <<: *db
+      DB_URL: jdbc:postgresql://postgres:5432/storefront?currentSchema=cart
+      CATALOGUE_URL: http://catalogue:8080
+
+  inventory:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: inventory-service } }
+    environment:
+      <<: *db
+      DB_URL: jdbc:postgresql://postgres:5432/storefront?currentSchema=inventory
+
+  payment:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: payment-service } }
+    environment:
+      <<: *db
+      DB_URL: jdbc:postgresql://postgres:5432/storefront?currentSchema=payment
+
+  order:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: order-service } }
+    environment:
+      <<: *db
+      DB_URL: jdbc:postgresql://postgres:5432/storefront?currentSchema=ordering
+      CART_URL: http://cart:8080
+      CATALOGUE_URL: http://catalogue:8080
+      INVENTORY_URL: http://inventory:8080
+      PAYMENT_URL: http://payment:8080
+      MQ_URL: amqp://rabbitmq:5672
+
+  notification:
+    <<: *java-service
+    build: { context: ., args: { SERVICE: notification-service } }
+    environment:
+      MQ_URL: amqp://rabbitmq:5672
+
+  # ── web ─────────────────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+
+  gateway:
+    image: nginx:stable-alpine
+    volumes: ["./local/gateway.conf:/etc/nginx/conf.d/default.conf:ro"]
+    ports: ["8080:80"]
+    depends_on: [frontend, catalogue, cart, inventory, order]
+
+volumes:
+  pgdata:

@@ -1,0 +1,4 @@
+# Envoy Gateway — the Gateway API implementation.
+# The chart also installs the Gateway API CRDs (Gateway, HTTPRoute, …).
+deployment:
+  replicas: 2

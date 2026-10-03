@@ -1,0 +1,2 @@
+# metrics-server — CPU/memory metrics for HorizontalPodAutoscalers and `kubectl top`.
+replicas: 2

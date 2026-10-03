@@ -1,0 +1,119 @@
+# ─────────────────────────────────────────────────────────────────────
+#  catalogue — products from PostgreSQL, cached in ElastiCache Redis
+#  Reached from: Gateway (GET /api/products), cart, order
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalogue
+  labels: { app: catalogue }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: catalogue }
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } # never drop below 2 ready pods
+  template:
+    metadata:
+      labels: { app: catalogue }
+    spec:
+      automountServiceAccountToken: false # the app never talks to the Kubernetes API
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: catalogue }
+      containers:
+        - name: app
+          image: __ECR_REGISTRY__/storefront/catalogue-service:__IMAGE_TAG__
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: service-urls }
+          env:
+            # PostgreSQL (RDS) — values from the "postgres" Secret (External Secrets)
+            - name: DB_HOST
+              valueFrom: { secretKeyRef: { name: postgres, key: host } }
+            - name: DB_PORT
+              valueFrom: { secretKeyRef: { name: postgres, key: port } }
+            - name: DB_NAME
+              valueFrom: { secretKeyRef: { name: postgres, key: dbname } }
+            - name: DB_USERNAME
+              valueFrom: { secretKeyRef: { name: postgres, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres, key: password } }
+            - name: DB_URL
+              value: jdbc:postgresql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=require&currentSchema=catalogue
+            # Redis (ElastiCache) — TLS + AUTH token
+            - name: REDIS_HOST
+              valueFrom: { secretKeyRef: { name: redis, key: host } }
+            - name: REDIS_PORT
+              valueFrom: { secretKeyRef: { name: redis, key: port } }
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: redis, key: password } }
+            - name: REDIS_SSL
+              value: "true"
+          startupProbe: # JVM start + Flyway migration: allow up to 3 minutes
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 } # let Envoy stop sending traffic before Spring shuts down
+          resources:
+            requests: { cpu: 250m, memory: 768Mi }
+            limits: { memory: 1Gi } # no CPU limit: avoids throttling the JVM
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogue
+  labels: { app: catalogue }
+spec:
+  selector: { app: catalogue }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: catalogue
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: catalogue }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalogue
+spec:
+  minAvailable: 1 # node upgrades drain one pod at a time
+  selector:
+    matchLabels: { app: catalogue }

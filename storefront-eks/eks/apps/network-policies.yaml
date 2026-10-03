@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Zero-trust inside the namespace (enforced by the VPC CNI, enabled in
+#  infra/eks.tf). Start from "deny all inbound", then allow exactly the
+#  arrows in the architecture diagram. Outbound stays open (RDS, Redis,
+#  MQ and DNS are reached through security groups instead).
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Envoy Gateway pods → the five public services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-gateway
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [frontend, catalogue, cart, order, inventory] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: envoy-gateway-system }
+      ports:
+        - { port: 8080, protocol: TCP }
+---
+# cart → catalogue, order → catalogue
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: catalogue-from-cart-and-order
+spec:
+  podSelector:
+    matchLabels: { app: catalogue }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [cart, order] }
+      ports:
+        - { port: 8080, protocol: TCP }
+---
+# order → cart, inventory, payment
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-from-order
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [cart, inventory, payment] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: order }
+      ports:
+        - { port: 8080, protocol: TCP }
